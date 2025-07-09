@@ -1,0 +1,86 @@
+name: Build Next.js App with Kaniko
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: registry.dev-tools.svc.cluster.local:5000
+  IMAGE_NAME: nextjs-hello-world
+
+jobs:
+  build:
+    runs-on: docker
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up build context
+        run: |
+          echo "Setting up build context for Kaniko"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Registry: $REGISTRY"
+
+      - name: Build and push Docker image with Kaniko
+        run: |
+          # Create kaniko context directory
+          mkdir -p /kaniko/context
+
+          # Copy source code to kaniko context
+          cp -r . /kaniko/context/
+
+          # Set image tag based on branch and commit
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            IMAGE_TAG="latest"
+          else
+            IMAGE_TAG="${{ github.ref_name }}"
+          fi
+
+          # Add commit SHA as additional tag
+          COMMIT_TAG="${{ github.sha }}"
+
+          echo "Building image: $REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+          echo "Additional tag: $REGISTRY/$IMAGE_NAME:$COMMIT_TAG"
+
+          # Run Kaniko executor
+          docker run --rm \
+            -v /kaniko:/kaniko \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            gcr.io/kaniko-project/executor:latest \
+            --dockerfile=Dockerfile \
+            --context=dir:///kaniko/context \
+            --destination=$REGISTRY/$IMAGE_NAME:$IMAGE_TAG \
+            --destination=$REGISTRY/$IMAGE_NAME:$COMMIT_TAG \
+            --cache=true \
+            --cache-ttl=24h \
+            --cleanup
+
+      - name: Image build summary
+        run: |
+          echo "✅ Docker image built successfully!"
+          echo "📦 Image: $REGISTRY/$IMAGE_NAME:${{ github.ref_name }}"
+          echo "🏷️  Tags: ${{ github.ref_name }}, ${{ github.sha }}"
+          echo "🚀 Ready for deployment!"
+
+  # Optional: Add a deployment job that can be triggered after successful build
+  deploy-info:
+    runs-on: docker
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deployment information
+        run: |
+          echo "🎉 Main branch build completed!"
+          echo "📋 Deployment options:"
+          echo "   • Kubernetes: kubectl set image deployment/nextjs-app container=$REGISTRY/$IMAGE_NAME:latest"
+          echo "   • Docker run: docker run -p 3000:3000 $REGISTRY/$IMAGE_NAME:latest"
+          echo "   • Vercel: Can be deployed directly from this repository"
+          echo ""
+          echo "🔗 API endpoint will be available at: /api/hello"
+          echo "🌐 Application will be available at: http://localhost:3000"
