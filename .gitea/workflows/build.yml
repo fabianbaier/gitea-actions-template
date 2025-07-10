@@ -1,86 +1,154 @@
-name: Build Next.js App with Kaniko
+name: Test Docker with Host Network
 
 on:
   push:
     branches:
       - main
       - develop
-  pull_request:
-    branches:
-      - main
 
 env:
-  REGISTRY: registry.dev-tools.svc.cluster.local:5000
+  REGISTRY: docker-registry:5000
   IMAGE_NAME: nextjs-hello-world
 
 jobs:
-  build:
-    runs-on: docker
+  test:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up build context
+      - name: Debug host network environment
         run: |
-          echo "Setting up build context for Kaniko"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Registry: $REGISTRY"
+          echo "=== Host Network Environment Debug ==="
+          echo "Current user: $(whoami)"
+          echo "Current directory: $(pwd)"
 
-      - name: Build and push Docker image with Kaniko
+          echo "=== Network Configuration ==="
+          # In host network mode, we should see the actual host interfaces
+          ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "No network info"
+
+          echo "=== Docker Daemon Connectivity ==="
+          # Check what Docker endpoints are available
+          netstat -tlnp 2>/dev/null | grep -E "(2375|2376)" || echo "No Docker ports visible"
+
+          echo "=== Environment Variables ==="
+          env | grep -i docker || echo "No Docker env vars"
+
+          echo "=== File System Check ==="
+          ls -la /var/run/docker.sock 2>/dev/null && echo "✅ Docker socket found" || echo "❌ No Docker socket"
+          ls -la /certs/ 2>/dev/null && echo "✅ /certs found" || echo "❌ No /certs"
+
+      - name: Test Docker connections
         run: |
-          # Create kaniko context directory
-          mkdir -p /kaniko/context
+          echo "=== Testing Docker Connections ==="
 
-          # Copy source code to kaniko context
-          cp -r . /kaniko/context/
+          # Test 1: Try the configured TLS connection
+          echo "Test 1: TLS connection (current config)"
+          if [ "$DOCKER_HOST" ] && [ "$DOCKER_TLS_VERIFY" ] && [ "$DOCKER_CERT_PATH" ]; then
+            echo "Using configured Docker environment:"
+            echo "  DOCKER_HOST: $DOCKER_HOST"
+            echo "  DOCKER_TLS_VERIFY: $DOCKER_TLS_VERIFY"
+            echo "  DOCKER_CERT_PATH: $DOCKER_CERT_PATH"
 
-          # Set image tag based on branch and commit
+            if docker version >/dev/null 2>&1; then
+              echo "✅ Configured Docker connection works!"
+              docker version
+              DOCKER_WORKING=true
+            else
+              echo "❌ Configured Docker connection failed"
+              DOCKER_WORKING=false
+            fi
+          else
+            echo "❌ Docker environment variables not set"
+            DOCKER_WORKING=false
+          fi
+
+          # Test 2: Try direct host connections if configured connection fails
+          if [ "$DOCKER_WORKING" != "true" ]; then
+            echo ""
+            echo "Test 2: Direct host connections"
+
+            # Try TLS on host network
+            echo "Trying TLS on host network (port 2376)..."
+            if docker --host=tcp://127.0.0.1:2376 --tls version >/dev/null 2>&1; then
+              echo "✅ Host TLS works!"
+              export DOCKER_HOST=tcp://127.0.0.1:2376
+              export DOCKER_TLS_VERIFY=1
+              unset DOCKER_CERT_PATH  # Let Docker find certificates automatically
+              DOCKER_WORKING=true
+            else
+              echo "❌ Host TLS failed"
+            fi
+
+            # Try non-TLS on host network
+            if [ "$DOCKER_WORKING" != "true" ]; then
+              echo "Trying non-TLS on host network (port 2375)..."
+              if docker --host=tcp://127.0.0.1:2375 version >/dev/null 2>&1; then
+                echo "✅ Host non-TLS works!"
+                export DOCKER_HOST=tcp://127.0.0.1:2375
+                unset DOCKER_TLS_VERIFY
+                unset DOCKER_CERT_PATH
+                DOCKER_WORKING=true
+              else
+                echo "❌ Host non-TLS failed"
+              fi
+            fi
+
+            # Try Unix socket
+            if [ "$DOCKER_WORKING" != "true" ]; then
+              echo "Trying Unix socket..."
+              if docker --host=unix:///var/run/docker.sock version >/dev/null 2>&1; then
+                echo "✅ Unix socket works!"
+                export DOCKER_HOST=unix:///var/run/docker.sock
+                unset DOCKER_TLS_VERIFY
+                unset DOCKER_CERT_PATH
+                DOCKER_WORKING=true
+              else
+                echo "❌ Unix socket failed"
+              fi
+            fi
+          fi
+
+          if [ "$DOCKER_WORKING" = "true" ]; then
+            echo ""
+            echo "✅ Docker is working with:"
+            echo "  DOCKER_HOST: $DOCKER_HOST"
+            echo "  DOCKER_TLS_VERIFY: ${DOCKER_TLS_VERIFY:-unset}"
+            echo "  DOCKER_CERT_PATH: ${DOCKER_CERT_PATH:-unset}"
+
+            docker version
+            docker info
+          else
+            echo "❌ No working Docker connection found"
+            exit 1
+          fi
+
+      - name: Build and push with Docker
+        run: |
+          echo "=== Building and Pushing ==="
+
+          # Ensure we're using the working Docker configuration
+          # (This should be set from the previous step, but let's be explicit)
+
+          # Set image tag
           if [ "${{ github.ref_name }}" = "main" ]; then
             IMAGE_TAG="latest"
           else
             IMAGE_TAG="${{ github.ref_name }}"
           fi
 
-          # Add commit SHA as additional tag
-          COMMIT_TAG="${{ github.sha }}"
+          echo "Building: $REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+          echo "Docker configuration:"
+          echo "  DOCKER_HOST: $DOCKER_HOST"
+          echo "  DOCKER_TLS_VERIFY: ${DOCKER_TLS_VERIFY:-unset}"
 
-          echo "Building image: $REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
-          echo "Additional tag: $REGISTRY/$IMAGE_NAME:$COMMIT_TAG"
+          # Build the image
+          docker build -t $REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
+          docker build -t $REGISTRY/$IMAGE_NAME:${{ github.sha }} .
 
-          # Run Kaniko executor
-          docker run --rm \
-            -v /kaniko:/kaniko \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            gcr.io/kaniko-project/executor:latest \
-            --dockerfile=Dockerfile \
-            --context=dir:///kaniko/context \
-            --destination=$REGISTRY/$IMAGE_NAME:$IMAGE_TAG \
-            --destination=$REGISTRY/$IMAGE_NAME:$COMMIT_TAG \
-            --cache=true \
-            --cache-ttl=24h \
-            --cleanup
+          # Push to registry
+          echo "=== Pushing to registry ==="
+          docker push $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+          docker push $REGISTRY/$IMAGE_NAME:${{ github.sha }}
 
-      - name: Image build summary
-        run: |
-          echo "✅ Docker image built successfully!"
-          echo "📦 Image: $REGISTRY/$IMAGE_NAME:${{ github.ref_name }}"
-          echo "🏷️  Tags: ${{ github.ref_name }}, ${{ github.sha }}"
-          echo "🚀 Ready for deployment!"
-
-  # Optional: Add a deployment job that can be triggered after successful build
-  deploy-info:
-    runs-on: docker
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Deployment information
-        run: |
-          echo "🎉 Main branch build completed!"
-          echo "📋 Deployment options:"
-          echo "   • Kubernetes: kubectl set image deployment/nextjs-app container=$REGISTRY/$IMAGE_NAME:latest"
-          echo "   • Docker run: docker run -p 3000:3000 $REGISTRY/$IMAGE_NAME:latest"
-          echo "   • Vercel: Can be deployed directly from this repository"
-          echo ""
-          echo "🔗 API endpoint will be available at: /api/hello"
-          echo "🌐 Application will be available at: http://localhost:3000"
+          echo "✅ Build and push completed!"
