@@ -17,111 +17,139 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Debug host network environment
-        run: |
-          echo "=== Host Network Environment Debug ==="
-          echo "Current user: $(whoami)"
-          echo "Current directory: $(pwd)"
+      # - name: Debug host network environment
+      #   run: |
+      #     echo "=== Host Network Environment Debug ==="
+      #     echo "Current user: $(whoami)"
+      #     echo "Current directory: $(pwd)"
 
-          echo "=== Network Configuration ==="
-          # In host network mode, we should see the actual host interfaces
-          ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "No network info"
+      #     echo "=== Network Configuration ==="
+      #     # In host network mode, we should see the actual host interfacess
+      #     ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "No network info"
 
-          echo "=== Docker Daemon Connectivity ==="
-          # Check what Docker endpoints are available
-          netstat -tlnp 2>/dev/null | grep -E "(2375|2376)" || echo "No Docker ports visible"
+      #     echo "=== Docker Daemon Connectivity ==="
+      #     # Check what Docker endpoints are available
+      #     netstat -tlnp 2>/dev/null | grep -E "(2375|2376)" || echo "No Docker ports visible"
 
-          echo "=== Environment Variables ==="
-          env | grep -i docker || echo "No Docker env vars"
+      #     echo "=== Environment Variables ==="
+      #     env | grep -i docker || echo "No Docker env vars"
 
-          echo "=== File System Check ==="
-          ls -la /var/run/docker.sock 2>/dev/null && echo "✅ Docker socket found" || echo "❌ No Docker socket"
-          ls -la /certs/ 2>/dev/null && echo "✅ /certs found" || echo "❌ No /certs"
+      #     echo "=== File System Check ==="
+      #     ls -la /var/run/docker.sock 2>/dev/null && echo "✅ Docker socket found" || echo "❌ No Docker socket"
+      #     ls -la /certs/ 2>/dev/null && echo "✅ /certs found" || echo "❌ No /certs"
 
-      - name: Test Docker connections
-        run: |
-          echo "=== Testing Docker Connections ==="
+      # - name: Debug Docker Connection
+      #   run: |
+      #     echo "=== Starting Debug Session ==="
+      #     echo "Testing Docker connection step by step..."
 
-          # Test 1: Try the configured TLS connection
-          echo "Test 1: TLS connection (current config)"
-          if [ "$DOCKER_HOST" ] && [ "$DOCKER_TLS_VERIFY" ] && [ "$DOCKER_CERT_PATH" ]; then
-            echo "Using configured Docker environment:"
-            echo "  DOCKER_HOST: $DOCKER_HOST"
-            echo "  DOCKER_TLS_VERIFY: $DOCKER_TLS_VERIFY"
-            echo "  DOCKER_CERT_PATH: $DOCKER_CERT_PATH"
+      #     echo "1. Environment variables:"
+      #     echo "DOCKER_HOST: $DOCKER_HOST"
+      #     echo "DOCKER_TLS_VERIFY: $DOCKER_TLS_VERIFY"
+      #     echo "DOCKER_CERT_PATH: $DOCKER_CERT_PATH"
 
-            if docker version >/dev/null 2>&1; then
-              echo "✅ Configured Docker connection works!"
-              docker version
-              DOCKER_WORKING=true
-            else
-              echo "❌ Configured Docker connection failed"
-              DOCKER_WORKING=false
-            fi
-          else
-            echo "❌ Docker environment variables not set"
-            DOCKER_WORKING=false
-          fi
+      #     echo "2. Certificate files:"
+      #     ls -la $DOCKER_CERT_PATH/ || echo "No cert path found"
 
-          # Test 2: Try direct host connections if configured connection fails
-          if [ "$DOCKER_WORKING" != "true" ]; then
-            echo ""
-            echo "Test 2: Direct host connections"
+      #     echo "3. Network connectivity test:"
+      #     nc -zv 127.0.0.1 2376 || echo "Cannot connect to port 2376"
 
-            # Try TLS on host network
-            echo "Trying TLS on host network (port 2376)..."
-            if docker --host=tcp://127.0.0.1:2376 --tls version >/dev/null 2>&1; then
-              echo "✅ Host TLS works!"
-              export DOCKER_HOST=tcp://127.0.0.1:2376
-              export DOCKER_TLS_VERIFY=1
-              unset DOCKER_CERT_PATH  # Let Docker find certificates automatically
-              DOCKER_WORKING=true
-            else
-              echo "❌ Host TLS failed"
-            fi
+      #     echo "4. Docker version test:"
+      #     timeout 10 docker version || echo "Docker version failed"
 
-            # Try non-TLS on host network
-            if [ "$DOCKER_WORKING" != "true" ]; then
-              echo "Trying non-TLS on host network (port 2375)..."
-              if docker --host=tcp://127.0.0.1:2375 version >/dev/null 2>&1; then
-                echo "✅ Host non-TLS works!"
-                export DOCKER_HOST=tcp://127.0.0.1:2375
-                unset DOCKER_TLS_VERIFY
-                unset DOCKER_CERT_PATH
-                DOCKER_WORKING=true
-              else
-                echo "❌ Host non-TLS failed"
-              fi
-            fi
+      #     echo "5. Docker info test:"
+      #     timeout 10 docker info || echo "Docker info failed"
 
-            # Try Unix socket
-            if [ "$DOCKER_WORKING" != "true" ]; then
-              echo "Trying Unix socket..."
-              if docker --host=unix:///var/run/docker.sock version >/dev/null 2>&1; then
-                echo "✅ Unix socket works!"
-                export DOCKER_HOST=unix:///var/run/docker.sock
-                unset DOCKER_TLS_VERIFY
-                unset DOCKER_CERT_PATH
-                DOCKER_WORKING=true
-              else
-                echo "❌ Unix socket failed"
-              fi
-            fi
-          fi
+      #     echo "=== Debug session ready - sleeping 30 minutes ==="
+      #     echo "Connect with: kubectl exec -it gitea-actions-act-runner-0 -n proj-f7c4d366-fabi -- bash"
+      #     echo "Then: docker ps to see containers"
+      #     echo "Then: docker exec -it <job-container-id> bash"
+      #     sleep 1800
 
-          if [ "$DOCKER_WORKING" = "true" ]; then
-            echo ""
-            echo "✅ Docker is working with:"
-            echo "  DOCKER_HOST: $DOCKER_HOST"
-            echo "  DOCKER_TLS_VERIFY: ${DOCKER_TLS_VERIFY:-unset}"
-            echo "  DOCKER_CERT_PATH: ${DOCKER_CERT_PATH:-unset}"
+      # - name: Test Docker connections
+      #   run: |
+      #     echo "=== Testing Docker Connections ==="
 
-            docker version
-            docker info
-          else
-            echo "❌ No working Docker connection found"
-            exit 1
-          fi
+      #     # Test 1: Try the configured TLS connection
+      #     echo "Test 1: TLS connection (current config)"
+      #     if [ "$DOCKER_HOST" ] && [ "$DOCKER_TLS_VERIFY" ] && [ "$DOCKER_CERT_PATH" ]; then
+      #       echo "Using configured Docker environment:"
+      #       echo "  DOCKER_HOST: $DOCKER_HOST"
+      #       echo "  DOCKER_TLS_VERIFY: $DOCKER_TLS_VERIFY"
+      #       echo "  DOCKER_CERT_PATH: $DOCKER_CERT_PATH"
+
+      #       if docker version >/dev/null 2>&1; then
+      #         echo "✅ Configured Docker connection works!"
+      #         docker version
+      #         DOCKER_WORKING=true
+      #       else
+      #         echo "❌ Configured Docker connection failed"
+      #         DOCKER_WORKING=false
+      #       fi
+      #     else
+      #       echo "❌ Docker environment variables not set"
+      #       DOCKER_WORKING=false
+      #     fi
+
+      #     # Test 2: Try direct host connections if configured connection fails
+      #     if [ "$DOCKER_WORKING" != "true" ]; then
+      #       echo ""
+      #       echo "Test 2: Direct host connections"
+
+      #       # Try TLS on host network
+      #       echo "Trying TLS on host network (port 2376)..."
+      #       if docker --host=tcp://127.0.0.1:2376 --tls version >/dev/null 2>&1; then
+      #         echo "✅ Host TLS works!"
+      #         export DOCKER_HOST=tcp://127.0.0.1:2376
+      #         export DOCKER_TLS_VERIFY=1
+      #         unset DOCKER_CERT_PATH  # Let Docker find certificates automatically
+      #         DOCKER_WORKING=true
+      #       else
+      #         echo "❌ Host TLS failed"
+      #       fi
+
+      #       # Try non-TLS on host network
+      #       if [ "$DOCKER_WORKING" != "true" ]; then
+      #         echo "Trying non-TLS on host network (port 2375)..."
+      #         if docker --host=tcp://127.0.0.1:2375 version >/dev/null 2>&1; then
+      #           echo "✅ Host non-TLS works!"
+      #           export DOCKER_HOST=tcp://127.0.0.1:2375
+      #           unset DOCKER_TLS_VERIFY
+      #           unset DOCKER_CERT_PATH
+      #           DOCKER_WORKING=true
+      #         else
+      #           echo "❌ Host non-TLS failed"
+      #         fi
+      #       fi
+
+      #       # Try Unix socket
+      #       if [ "$DOCKER_WORKING" != "true" ]; then
+      #         echo "Trying Unix socket..."
+      #         if docker --host=unix:///var/run/docker.sock version >/dev/null 2>&1; then
+      #           echo "✅ Unix socket works!"
+      #           export DOCKER_HOST=unix:///var/run/docker.sock
+      #           unset DOCKER_TLS_VERIFY
+      #           unset DOCKER_CERT_PATH
+      #           DOCKER_WORKING=true
+      #         else
+      #           echo "❌ Unix socket failed"
+      #         fi
+      #       fi
+      #     fi
+
+      #     if [ "$DOCKER_WORKING" = "true" ]; then
+      #       echo ""
+      #       echo "✅ Docker is working with:"
+      #       echo "  DOCKER_HOST: $DOCKER_HOST"
+      #       echo "  DOCKER_TLS_VERIFY: ${DOCKER_TLS_VERIFY:-unset}"
+      #       echo "  DOCKER_CERT_PATH: ${DOCKER_CERT_PATH:-unset}"
+
+      #       docker version
+      #       docker info
+      #     else
+      #       echo "❌ No working Docker connection found"
+      #       exit 1
+      #     fi
 
       - name: Build and push with Docker
         run: |
@@ -142,13 +170,15 @@ jobs:
           echo "  DOCKER_HOST: $DOCKER_HOST"
           echo "  DOCKER_TLS_VERIFY: ${DOCKER_TLS_VERIFY:-unset}"
 
+          npm install
+
           # Build the image
           docker build -t $REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
           docker build -t $REGISTRY/$IMAGE_NAME:${{ github.sha }} .
 
           # Push to registry
           echo "=== Pushing to registry ==="
-          docker push $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
-          docker push $REGISTRY/$IMAGE_NAME:${{ github.sha }}
+          DOCKER_TLS_VERIFY=0 docker push $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+          DOCKER_TLS_VERIFY=0 docker push $REGISTRY/$IMAGE_NAME:${{ github.sha }}
 
           echo "✅ Build and push completed!"
