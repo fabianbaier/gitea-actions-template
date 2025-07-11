@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-preview
+  namespace: proj-4d8385cd-fabi
+  labels:
+    app: frontend-preview
+    pulze.ai/managed-by: gitea-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend-preview
+  template:
+    metadata:
+      labels:
+        app: frontend-preview
+    spec:
+      containers:
+      - name: frontend
+        image: docker-registry.proj-4d8385cd-fabi.svc.cluster.local:443/nextjs-hello-world:14860b5deb9a2b954b251fc6618d32a87c37a829
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        env:
+        - name: NODE_ENV
+          value: "production"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      nodeSelector:
+        pulze.ai/workload-type: user-projects
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-preview
+  namespace: proj-4d8385cd-fabi
+  labels:
+    app: frontend-preview
+spec:
+  selector:
+    app: frontend-preview
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend-preview
+  namespace: proj-4d8385cd-fabi
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+  labels:
+    app: frontend-preview
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: proj-4d8385cd-fabi.vibe.pulze.ai
+    http:
+      paths:
+      - path: /preview(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: frontend-preview
+            port:
+              number: 3000
