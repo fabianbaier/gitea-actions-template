@@ -14,151 +14,99 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          kubectl version --client
+
+      - name: Debug environment
+        run: |
+          echo "=== Environment Debug ==="
+          echo "Current user: $(whoami)"
+          echo "Current directory: $(pwd)"
+          echo "Hostname: $(hostname)"
+
+          echo "=== Checking for service account files ==="
+          if [ -d "/var/run/secrets/kubernetes.io/serviceaccount" ]; then
+            echo "✅ Service account directory exists"
+            ls -la /var/run/secrets/kubernetes.io/serviceaccount/
+
+            if [ -f "/var/run/secrets/kubernetes.io/serviceaccount/token" ]; then
+              echo "✅ Token file exists"
+              echo "Token length: $(wc -c < /var/run/secrets/kubernetes.io/serviceaccount/token)"
+            else
+              echo "❌ Token file missing"
+            fi
+
+            if [ -f "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" ]; then
+              echo "✅ CA certificate exists"
+            else
+              echo "❌ CA certificate missing"
+            fi
+
+            if [ -f "/var/run/secrets/kubernetes.io/serviceaccount/namespace" ]; then
+              echo "✅ Namespace file exists"
+              echo "Namespace: $(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
+            else
+              echo "❌ Namespace file missing"
+            fi
+          else
+            echo "❌ Service account directory does not exist"
+            echo "Available directories in /var/run/secrets/:"
+            ls -la /var/run/secrets/ 2>/dev/null || echo "No /var/run/secrets/ directory"
+          fi
+
+      - name: Setup Kubernetes access
+        run: |
+          echo "=== Setting up kubeconfig for in-cluster authentication ==="
+
+          # Check if we're in the runner pod or a job container
+          if [ -f "/var/run/secrets/kubernetes.io/serviceaccount/token" ]; then
+            echo "✅ Using service account from mounted volume"
+
+            # Get the namespace from the service account
+            NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+            echo "Detected namespace: $NAMESPACE"
+
+            # Create kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
+
+            kubectl config set-cluster kubernetes \
+              --server=https://kubernetes.default.svc.cluster.local:443 \
+              --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+
+            kubectl config set-credentials service-account \
+              --token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+
+            kubectl config set-context kubernetes \
+              --cluster=kubernetes \
+              --user=service-account \
+              --namespace=$NAMESPACE
+
+            kubectl config use-context kubernetes
+
+            echo "=== Testing cluster access ==="
+            # Test with a simple command that doesn't require pod listing permissions
+            kubectl auth can-i get deployments -n $NAMESPACE || {
+              echo "⚠️ Limited permissions detected, but proceeding with deployment"
+            }
+            echo "✅ Kubernetes access configured!"
+
+          else
+            echo "❌ Service account token not found"
+            echo "Cannot proceed without service account access"
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # - name: Debug host network environment
-      #   run: |
-      #     echo "=== Host Network Environment Debug ==="
-      #     echo "Current user: $(whoami)"
-      #     echo "Current directory: $(pwd)"
-
-      #     echo "=== Network Configuration ==="
-      #     # In host network mode, we should see the actual host interfacess
-      #     ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "No network info"
-
-      #     echo "=== Docker Daemon Connectivity ==="
-      #     # Check what Docker endpoints are available
-      #     netstat -tlnp 2>/dev/null | grep -E "(2375|2376)" || echo "No Docker ports visible"
-
-      #     echo "=== Environment Variables ==="
-      #     env | grep -i docker || echo "No Docker env vars"
-
-      #     echo "=== File System Check ==="
-      #     ls -la /var/run/docker.sock 2>/dev/null && echo "✅ Docker socket found" || echo "❌ No Docker socket"
-      #     ls -la /certs/ 2>/dev/null && echo "✅ /certs found" || echo "❌ No /certs"
-
-      # - name: Debug Docker Connection
-      #   run: |
-      #     echo "=== Starting Debug Session ==="
-      #     echo "Testing Docker connection step by step..."
-
-      #     echo "1. Environment variables:"
-      #     echo "DOCKER_HOST: $DOCKER_HOST"
-      #     echo "DOCKER_TLS_VERIFY: $DOCKER_TLS_VERIFY"
-      #     echo "DOCKER_CERT_PATH: $DOCKER_CERT_PATH"
-
-      #     echo "2. Certificate files:"
-      #     ls -la $DOCKER_CERT_PATH/ || echo "No cert path found"
-
-      #     echo "3. Network connectivity test:"
-      #     nc -zv 127.0.0.1 2376 || echo "Cannot connect to port 2376"
-
-      #     echo "4. Docker version test:"
-      #     timeout 10 docker version || echo "Docker version failed"
-
-      #     echo "5. Docker info test:"
-      #     timeout 10 docker info || echo "Docker info failed"
-
-      #     echo "=== Debug session ready - sleeping 30 minutes ==="
-      #     echo "Connect with: kubectl exec -it gitea-actions-act-runner-0 -n proj-f7c4d366-fabi -- bash"
-      #     echo "Then: docker ps to see containers"
-      #     echo "Then: docker exec -it <job-container-id> bash"
-      #     sleep 1800
-
-      # - name: Test Docker connections
-      #   run: |
-      #     echo "=== Testing Docker Connections ==="
-
-      #     # Test 1: Try the configured TLS connection
-      #     echo "Test 1: TLS connection (current config)"
-      #     if [ "$DOCKER_HOST" ] && [ "$DOCKER_TLS_VERIFY" ] && [ "$DOCKER_CERT_PATH" ]; then
-      #       echo "Using configured Docker environment:"
-      #       echo "  DOCKER_HOST: $DOCKER_HOST"
-      #       echo "  DOCKER_TLS_VERIFY: $DOCKER_TLS_VERIFY"
-      #       echo "  DOCKER_CERT_PATH: $DOCKER_CERT_PATH"
-
-      #       if docker version >/dev/null 2>&1; then
-      #         echo "✅ Configured Docker connection works!"
-      #         docker version
-      #         DOCKER_WORKING=true
-      #       else
-      #         echo "❌ Configured Docker connection failed"
-      #         DOCKER_WORKING=false
-      #       fi
-      #     else
-      #       echo "❌ Docker environment variables not set"
-      #       DOCKER_WORKING=false
-      #     fi
-
-      #     # Test 2: Try direct host connections if configured connection fails
-      #     if [ "$DOCKER_WORKING" != "true" ]; then
-      #       echo ""
-      #       echo "Test 2: Direct host connections"
-
-      #       # Try TLS on host network
-      #       echo "Trying TLS on host network (port 2376)..."
-      #       if docker --host=tcp://127.0.0.1:2376 --tls version >/dev/null 2>&1; then
-      #         echo "✅ Host TLS works!"
-      #         export DOCKER_HOST=tcp://127.0.0.1:2376
-      #         export DOCKER_TLS_VERIFY=1
-      #         unset DOCKER_CERT_PATH  # Let Docker find certificates automatically
-      #         DOCKER_WORKING=true
-      #       else
-      #         echo "❌ Host TLS failed"
-      #       fi
-
-      #       # Try non-TLS on host network
-      #       if [ "$DOCKER_WORKING" != "true" ]; then
-      #         echo "Trying non-TLS on host network (port 2375)..."
-      #         if docker --host=tcp://127.0.0.1:2375 version >/dev/null 2>&1; then
-      #           echo "✅ Host non-TLS works!"
-      #           export DOCKER_HOST=tcp://127.0.0.1:2375
-      #           unset DOCKER_TLS_VERIFY
-      #           unset DOCKER_CERT_PATH
-      #           DOCKER_WORKING=true
-      #         else
-      #           echo "❌ Host non-TLS failed"
-      #         fi
-      #       fi
-
-      #       # Try Unix socket
-      #       if [ "$DOCKER_WORKING" != "true" ]; then
-      #         echo "Trying Unix socket..."
-      #         if docker --host=unix:///var/run/docker.sock version >/dev/null 2>&1; then
-      #           echo "✅ Unix socket works!"
-      #           export DOCKER_HOST=unix:///var/run/docker.sock
-      #           unset DOCKER_TLS_VERIFY
-      #           unset DOCKER_CERT_PATH
-      #           DOCKER_WORKING=true
-      #         else
-      #           echo "❌ Unix socket failed"
-      #         fi
-      #       fi
-      #     fi
-
-      #     if [ "$DOCKER_WORKING" = "true" ]; then
-      #       echo ""
-      #       echo "✅ Docker is working with:"
-      #       echo "  DOCKER_HOST: $DOCKER_HOST"
-      #       echo "  DOCKER_TLS_VERIFY: ${DOCKER_TLS_VERIFY:-unset}"
-      #       echo "  DOCKER_CERT_PATH: ${DOCKER_CERT_PATH:-unset}"
-
-      #       docker version
-      #       docker info
-      #     else
-      #       echo "❌ No working Docker connection found"
-      #       exit 1
-      #     fi
 
       - name: Build and push with Docker
         run: |
           echo "=== Building and Pushing ==="
 
-          # Ensure we're using the working Docker configuration
-          # (This should be set from the previous step, but let's be explicit)
-
-          # Set image tag
           if [ "${{ github.ref_name }}" = "main" ]; then
             IMAGE_TAG="latest"
           else
@@ -169,16 +117,137 @@ jobs:
           echo "Docker configuration:"
           echo "  DOCKER_HOST: $DOCKER_HOST"
           echo "  DOCKER_TLS_VERIFY: ${DOCKER_TLS_VERIFY:-unset}"
+          echo "  DOCKER_CERT_PATH: ${DOCKER_CERT_PATH:-unset}"
 
           npm install
 
-          # Build the image
           docker build -t $REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
           docker build -t $REGISTRY/$IMAGE_NAME:${{ github.sha }} .
 
-          # Push to registry
-          echo "=== Pushing to registry ==="
-          DOCKER_TLS_VERIFY=0 docker push $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
-          DOCKER_TLS_VERIFY=0 docker push $REGISTRY/$IMAGE_NAME:${{ github.sha }}
+          docker push $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+          docker push $REGISTRY/$IMAGE_NAME:${{ github.sha }}
 
           echo "✅ Build and push completed!"
+
+      - name: Deploy to Kubernetes
+        run: |
+          echo "=== Deploying to Kubernetes ==="
+
+          # Set up kubeconfig again for this step
+          export KUBECONFIG=/tmp/kubeconfig
+          NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            IMAGE_TAG="latest"
+          else
+            IMAGE_TAG="${{ github.ref_name }}"
+          fi
+
+          # Create a temporary deployment file with the correct namespace and image
+          cat > /tmp/deployment.yaml << EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: frontend-preview
+            namespace: $NAMESPACE
+            labels:
+              app: frontend-preview
+              pulze.ai/managed-by: gitea-actions
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: frontend-preview
+            template:
+              metadata:
+                labels:
+                  app: frontend-preview
+              spec:
+                containers:
+                - name: frontend
+                  image: $REGISTRY/$IMAGE_NAME:${{ github.sha }}
+                  ports:
+                  - containerPort: 3000
+                  resources:
+                    requests:
+                      memory: "128Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+                  env:
+                  - name: NODE_ENV
+                    value: "production"
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: 3000
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: 3000
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                nodeSelector:
+                  pulze.ai/workload-type: user-projects
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: frontend-preview
+            namespace: $NAMESPACE
+            labels:
+              app: frontend-preview
+          spec:
+            selector:
+              app: frontend-preview
+            ports:
+            - name: http
+              port: 3000
+              targetPort: 3000
+              protocol: TCP
+            type: ClusterIP
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: frontend-preview
+            namespace: $NAMESPACE
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /$2
+              nginx.ingress.kubernetes.io/use-regex: "true"
+            labels:
+              app: frontend-preview
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: $NAMESPACE.vibe.pulze.ai
+              http:
+                paths:
+                - path: /preview(/|$)(.*)
+                  pathType: ImplementationSpecific
+                  backend:
+                    service:
+                      name: frontend-preview
+                      port:
+                        number: 3000
+          EOF
+
+          echo "Applying deployment to namespace: $NAMESPACE"
+          echo "Using image: $REGISTRY/$IMAGE_NAME:${{ github.sha }}"
+
+          # Apply the deployment
+          kubectl apply -f /tmp/deployment.yaml
+
+          # Wait for deployment to be ready
+          echo "Waiting for deployment to be ready..."
+          kubectl rollout status deployment/frontend-preview -n $NAMESPACE --timeout=300s
+
+          # Show deployment status
+          kubectl get deployment frontend-preview -n $NAMESPACE
+          kubectl get service frontend-preview -n $NAMESPACE
+          kubectl get ingress frontend-preview -n $NAMESPACE
+
+          echo "✅ Deployment completed successfully!"
